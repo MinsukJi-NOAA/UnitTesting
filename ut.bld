@@ -1,0 +1,3 @@
+fv3_control | std   |
+fv3_control | 32bit | 32BIT=Y
+fv3_control | debug | 32BIT=Y DEBUG=Y
