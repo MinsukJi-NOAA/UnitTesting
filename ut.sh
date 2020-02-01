@@ -1,5 +1,4 @@
 #!/bin/bash
-# Perform unit tests
 set -eux
 
 error() {
@@ -42,8 +41,9 @@ usage_and_exit() {
   exit $1
 }
 
-readonly program=$(basename $0)
 [[ $# -eq 0 ]] && usage_and_exit 1
+
+readonly program=$(basename $0)
 
 # make sure only one instance of ut.sh is running
 #readonly lockdir=${PATHRT}/lock
@@ -58,11 +58,17 @@ readonly PATHRT=$(cd $(dirname $0) && pwd -P)
 cd $PATHRT
 # PATHTR - Path to trunk directory
 readonly PATHTR=$(cd ${PATHRT}/.. && pwd)
+# Log directory
+LOG_DIR=${PATHRT}/log_$MACHINE_ID
+rm -rf ${LOG_DIR}
+mkdir ${LOG_DIR}
+
 # Default compiler 'intel'
 export COMPILER=${NEMS_COMPILER:-intel}
 # detect_machine sets ACCNR and MACHINE_ID
 source detect_machine.sh
-source rt_utils.sh
+
+# Machine-dependent libraries, modules, variables, etc.
 if [[ $MACHINE_ID = hera.* ]]; then
   export NCEPLIBS=/scratch1/NCEPDEV/global/gwv/l819/lib
   source $PATHTR/NEMS/src/conf/module-setup.sh.inc
@@ -72,20 +78,13 @@ if [[ $MACHINE_ID = hera.* ]]; then
   COMPILER=${NEMS_COMPILER:-intel}
   QUEUE=debug
   dprefix=/scratch1/NCEPDEV
-  DISKNM=${dprefix}/nems/emc.nemspara/RT
   STMP=${dprefix}/stmp4
   PTMP=${dprefix}/stmp2
   SCHEDULER=slurm
-  #cp fv3_conf/fv3_slurm.IN_hera fv3_conf/fv3_slurm.IN
+  cp fv3_conf/fv3_slurm.IN_hera fv3_conf/fv3_slurm.IN
 else
   error "Unknown machine ID. Edit detect_machine.sh file"
 fi
-
-mkdir -p ${STMP}/${USER}
-NEW_BASELINE=${STMP}/${USER}/FV3_UT/UNIT_TEST
-RTPWD=${NEW_BASELINE}
-RUNDIR_ROOT=${RUNDIR_ROOT:-${PTMP}/${USER}}/FV3_UT/ut_$$
-mkdir -p ${RUNDIR_ROOT}
 
 CREATE_BASELINE=
 baseline_cases=
@@ -93,6 +92,7 @@ run_unit_test=
 unit_test_cases=
 TEST_NAME=
 
+# Parse command line arguments
 while getopts :c:r:n:h opt
 do
   case $opt in
@@ -146,6 +146,7 @@ do
   esac
 done
 
+# Various error checking
 if [ -z $TEST_NAME ]; then
   error "$program: please specify test-name. Try 'ut.sh -h' for usage."
 fi
@@ -156,8 +157,8 @@ elif [[ $CREATE_BASELINE = true && $run_unit_test = true ]]; then
   error "$program: cannot create baselines and run tests at the same time. Try 'ut.sh -h' for usage."
 fi
 
-# fill in ut_compile_cases & ut_run_cases
-# based on baseline_case & unit_test_cases
+# Fill in ut_compile_cases & ut_run_cases based on baseline_case & unit_test_cases
+# Cases are sorted in the order: std,thread,mpi,decomp,restart,32bit,debug
 ut_compile_cases=
 ut_run_cases=
 if [[ $CREATE_BASELINE == true ]]; then
@@ -218,25 +219,18 @@ ut_run_cases=$(echo $ut_run_cases | sed -e 's/^[0-9]//g' -e 's/ [0-9]/ /g')
 echo "ut_compile_cases are $ut_compile_cases"
 echo "ut_run_cases are $ut_run_cases"
 
-TESTS_FILE='ut.conf'
-[[ -f $TESTS_FILE ]] || error "$TESTS_FILE does not exist"
+##########################################################
+####                   COMPILE                        ####
+##########################################################
 build_file='ut.bld'
 [[ -f $build_file ]] || error "$build_file does not exist"
 
-COMPILE_LOG=${PATHRT}/Compile_$MACHINE_ID.log
-REGRESSIONTEST_LOG=${PATHRT}/RegressionTests_$MACHINE_ID.log
-LOG_DIR=${PATHRT}/log_$MACHINE_ID
-rm -rf ${LOG_DIR}
-mkdir ${LOG_DIR}
-source default_vars.sh
-COMPILE_NR=0
-rm -f fail_test
-rm -f ../fv3.exe
-rm -f fv3_*.x fv3_*.exe modules.fv3_*
-# Compile
+compile_log=${PATHRT}/Compile_$MACHINE_ID.log
+rm -f fv3_*.exe modules.fv3_*
+
 for i in $ut_compile_cases
 do
-  # given model and compile_case, select compile option
+  # Select compile option given model and compile_case
   while IFS="|" read model comp_case comp_opt
   do
     model=$(echo $model | sed -e 's/^ *//' -e 's/ *$//')
@@ -247,15 +241,70 @@ do
       break;
     fi
   done < $build_file
+  # Put in the safety check for when model & comp_case combination is not found in ut.bld
 
-  (( COMPILE_NR += 1 ))
-  echo "bash compiling for ${model} ${comp_case} with ${NEMS_VER}"
-  ./compile.sh $PATHTR/FV3 $MACHINE_ID "${NEMS_VER}" $COMPILE_NR >${LOG_DIR}/compile_${COMPILE_NR}.log 2>&1
-  echo "bash compile is done for ${model} ${comp_case}"
+  ./compile.sh $PATHTR/FV3 $MACHINE_ID "${NEMS_VER}" $i >${LOG_DIR}/compile_$i.log 2>&1
+  echo "bash compile is done for ${model} ${comp_case} with ${NEMS_VER}"
 done
 
-# Run
-for i in $ut_run_cases
-do
+##########################################################
+####                     RUN                          ####
+##########################################################
+mkdir -p ${STMP}/${USER}
+NEW_BASELINE=${STMP}/${USER}/FV3_UT/UNIT_TEST
+RTPWD=${NEW_BASELINE}
+RUNDIR_ROOT=${RUNDIR_ROOT:-${PTMP}/${USER}}/FV3_UT/ut_$$
+mkdir -p ${RUNDIR_ROOT}
+REGRESSIONTEST_LOG=${PATHRT}/RegressionTests_$MACHINE_ID.log
+# RT_SUFFIX & BL_SUFFIX are not used, but defined here
+# for compatibility with rt_utils.sh and run_test.sh
+RT_SUFFIX=""
+BL_SUFFIX=""
+# Load namelist default and override values
+source default_vars.sh
+source ${PATHRT}/tests/$TEST_NAME
+
+for rc in $ut_run_cases; do
+  comp_nm=std
+  case $rc in
+    std)
+      # nothing to be changed for std
+      ;;
+    thread)
+      ;;
+    mpi)
+      ;;
+    decomp)
+      ;;
+    restart)
+      ;;
+    32bit)
+      comp_nm=$rc
+      ;;
+    debug)
+      comp_nm=$rc
+      ;;
+  esac
+
+  cat <<- EOF > ${RUNDIR_ROOT}/run_test_$rc.env
+	  export MACHINE_ID=${MACHINE_ID}
+	  export RTPWD=${RTPWD}
+	  export PATHRT=${PATHRT}
+	  export PATHTR=${PATHTR}
+	  export NEW_BASELINE=${NEW_BASELINE}
+	  export CREATE_BASELINE=${CREATE_BASELINE}
+	  export RT_SUFFIX=${RT_SUFFIX}
+	  export BL_SUFFIX=${BL_SUFFIX}
+	  export SCHEDULER=${SCHEDULER}
+	  export ACCNR=${ACCNR}
+	  export QUEUE=${QUEUE}
+	  export LOG_DIR=${LOG_DIR}
+	EOF
+
+  ./run_test.sh $PATHRT $RUNDIR_ROOT $TEST_NAME $rc $comp_nm > $LOG_DIR/run_$TEST_NAME.log 2>&1
 done
 
+##
+## Unit test is either successful or failed
+##
+#rm -f fail_test
