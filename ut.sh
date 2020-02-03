@@ -1,6 +1,10 @@
 #!/bin/bash
 set -eux
 
+SECONDS=0
+
+hostname
+
 error() {
   echo
   echo "$@" 1>&2
@@ -41,32 +45,49 @@ usage_and_exit() {
   exit $1
 }
 
-[[ $# -eq 0 ]] && usage_and_exit 1
+cleanup() {
+  rm -rf ${lockdir}
+  trap 0
+  exit
+}
 
 readonly program=$(basename $0)
+[[ $# -eq 0 ]] && usage_and_exit 1
 
-# make sure only one instance of ut.sh is running
-#readonly lockdir=${PATHRT}/lock
-#if mkdir $lockdir 2>/dev/null; then
-#  echo $(hostname) $$ > ${lockdir}/PID
-#else
-#  error "Only one instance of ut.sh can be running at a time"
-#fi
+trap '{ echo ut.sh interrupted; cleanup; }' INT
+trap '{ echo ut.sh quit; cleanup; }' QUIT
+trap '{ echo ut.sh terminated; cleanup; }' TERM
+trap '{ echo ut.sh error on line $LINENO; cleanup; }' ERR
+trap '{ echo ut.sh finished; cleanup; }' EXIT
 
+
+# Default compiler: intel
+export COMPILER=${NEMS_COMPILER:-intel}
+# detect_machine sets ACCNR and MACHINE_ID
+source detect_machine.sh
 # PATHRT - Path to unit tests directory
 readonly PATHRT=$(cd $(dirname $0) && pwd -P)
 cd $PATHRT
 # PATHTR - Path to trunk directory
 readonly PATHTR=$(cd ${PATHRT}/.. && pwd)
+
+# make sure only one instance of ut.sh is running
+readonly lockdir=${PATHRT}/lock
+if mkdir $lockdir 2>/dev/null; then
+  echo $(hostname) $$ > ${lockdir}/PID
+else
+  error "Only one instance of ut.sh can be running at a time"
+fi
+
 # Log directory
 LOG_DIR=${PATHRT}/log_$MACHINE_ID
 rm -rf ${LOG_DIR}
 mkdir ${LOG_DIR}
-
-# Default compiler 'intel'
-export COMPILER=${NEMS_COMPILER:-intel}
-# detect_machine sets ACCNR and MACHINE_ID
-source detect_machine.sh
+# ROCOTO, ECFLOW, KEEP_RUNDIR are not used, but
+# defined here for compatibility with rt_fv3.sh
+ROCOTO=false
+ECFLOW=false
+KEEP_RUNDIR=false
 
 # Machine-dependent libraries, modules, variables, etc.
 if [[ $MACHINE_ID = hera.* ]]; then
@@ -75,9 +96,10 @@ if [[ $MACHINE_ID = hera.* ]]; then
   module use $PATHTR/modulefiles/${MACHINE_ID}
   module load fv3
 
-  COMPILER=${NEMS_COMPILER:-intel}
+  COMPILER=${NEMS_COMPILER:-intel} # in case compiler gets deleted by module purge
   QUEUE=debug
   dprefix=/scratch1/NCEPDEV
+  DISKNM=$dprefix/nems/emc.nemspara/RT
   STMP=${dprefix}/stmp4
   PTMP=${dprefix}/stmp2
   SCHEDULER=slurm
@@ -110,6 +132,7 @@ do
           error "Invalid baseline_cases specified: $i"
         fi
       done
+      run_unit_test=false
       echo "CREATE_BASELINE = $CREATE_BASELINE"
       echo "baseline_cases = $baseline_cases"
       echo "run_unit_test = $run_unit_test"
@@ -129,6 +152,7 @@ do
           error "Invalid unit_test_cases specified: $i"
         fi
       done
+      CREATE_BASELINE=false
       echo "run_unit_test = $run_unit_test"
       echo "unit_test_cases = $unit_test_cases"
       echo "CREATE_BASELINE = $CREATE_BASELINE"
@@ -219,16 +243,17 @@ ut_run_cases=$(echo $ut_run_cases | sed -e 's/^[0-9]//g' -e 's/ [0-9]/ /g')
 echo "ut_compile_cases are $ut_compile_cases"
 echo "ut_run_cases are $ut_run_cases"
 
-##########################################################
-####                   COMPILE                        ####
-##########################################################
+
+########################################################################
+####                            COMPILE                             ####
+########################################################################
 build_file='ut.bld'
 [[ -f $build_file ]] || error "$build_file does not exist"
 
 compile_log=${PATHRT}/Compile_$MACHINE_ID.log
 rm -f fv3_*.exe modules.fv3_*
 
-for i in $ut_compile_cases
+for name in $ut_compile_cases
 do
   # Select compile option given model and compile_case
   while IFS="|" read model comp_case comp_opt
@@ -236,30 +261,40 @@ do
     model=$(echo $model | sed -e 's/^ *//' -e 's/ *$//')
     comp_case=$(echo $comp_case | sed -e 's/^ *//' -e 's/ *$//')
     comp_opt=$(echo $comp_opt | sed -e 's/^ *//' -e 's/ *$//')
-    if [[ $model == $TEST_NAME && $comp_case == $i ]]; then
+    if [[ $model == $TEST_NAME && $comp_case == $name ]]; then
       NEMS_VER=$comp_opt
       break;
     fi
   done < $build_file
   # Put in the safety check for when model & comp_case combination is not found in ut.bld
 
-  ./compile.sh $PATHTR/FV3 $MACHINE_ID "${NEMS_VER}" $i >${LOG_DIR}/compile_$i.log 2>&1
+  ./compile.sh $PATHTR/FV3 $MACHINE_ID "${NEMS_VER}" $name >${LOG_DIR}/compile_${TEST_NAME}_$name.log 2>&1
   echo "bash compile is done for ${model} ${comp_case} with ${NEMS_VER}"
 done
 
-##########################################################
-####                     RUN                          ####
-##########################################################
+########################################################################
+####                              RUN                               ####
+########################################################################
 mkdir -p ${STMP}/${USER}
 NEW_BASELINE=${STMP}/${USER}/FV3_UT/UNIT_TEST
-RTPWD=${NEW_BASELINE}
+RTPWD=$DISKNM/NEMSfv3gfs/develop-20191230
+if [[ $CREATE_BASELINE == true ]]; then
+  rm -rf $NEW_BASELINE
+  mkdir -p $NEW_BASELINE  
+
+  rsync -a "${RTPWD}"/FV3_* "${NEW_BASELINE}"/
+  rsync -a "${RTPWD}"/WW3_* "${NEW_BASELINE}"/
+elif [[ $run_unit_test == true ]]; then
+  # TODO: It would be nice to remind the user when the baseline was generated
+  if [[! -d $NEW_BASELINE ]]; then
+    error "There is no baseline to run unit tests against. Create baselines first."
+  fi
+  RTPWD=${NEW_BASELINE}
+fi
+
 RUNDIR_ROOT=${RUNDIR_ROOT:-${PTMP}/${USER}}/FV3_UT/ut_$$
 mkdir -p ${RUNDIR_ROOT}
 REGRESSIONTEST_LOG=${PATHRT}/RegressionTests_$MACHINE_ID.log
-# RT_SUFFIX & BL_SUFFIX are not used, but defined here
-# for compatibility with rt_utils.sh and run_test.sh
-RT_SUFFIX=""
-BL_SUFFIX=""
 # Load namelist default and override values
 source default_vars.sh
 source ${PATHRT}/tests/$TEST_NAME
@@ -286,25 +321,54 @@ for rc in $ut_run_cases; do
       ;;
   esac
 
+  RT_SUFFIX="_$rc"
+  BL_SUFFIX="_$comp_nm"
+
   cat <<- EOF > ${RUNDIR_ROOT}/run_test_$rc.env
-	  export MACHINE_ID=${MACHINE_ID}
-	  export RTPWD=${RTPWD}
-	  export PATHRT=${PATHRT}
-	  export PATHTR=${PATHTR}
-	  export NEW_BASELINE=${NEW_BASELINE}
-	  export CREATE_BASELINE=${CREATE_BASELINE}
-	  export RT_SUFFIX=${RT_SUFFIX}
-	  export BL_SUFFIX=${BL_SUFFIX}
-	  export SCHEDULER=${SCHEDULER}
-	  export ACCNR=${ACCNR}
-	  export QUEUE=${QUEUE}
-	  export LOG_DIR=${LOG_DIR}
+	export MACHINE_ID=${MACHINE_ID}
+	export RTPWD=${RTPWD}
+	export PATHRT=${PATHRT}
+	export PATHTR=${PATHTR}
+	export NEW_BASELINE=${NEW_BASELINE}
+	export CREATE_BASELINE=${CREATE_BASELINE}
+	export RT_SUFFIX=${RT_SUFFIX}
+	export BL_SUFFIX=${BL_SUFFIX}
+	export SCHEDULER=${SCHEDULER}
+	export ACCNR=${ACCNR}
+	export QUEUE=${QUEUE}
+	export ROCOTO=${ROCOTO}
+	export LOG_DIR=${LOG_DIR}
 	EOF
 
-  ./run_test.sh $PATHRT $RUNDIR_ROOT $TEST_NAME $rc $comp_nm > $LOG_DIR/run_$TEST_NAME.log 2>&1
+  ./run_test.sh $PATHRT $RUNDIR_ROOT $TEST_NAME $rc $comp_nm > $LOG_DIR/run_${TEST_NAME}_$rc.log 2>&1
 done
 
 ##
 ## Unit test is either successful or failed
 ##
-#rm -f fail_test
+set +e
+cat ${LOG_DIR}/compile_*.log                   >  ${compile_log}
+cat ${LOG_DIR}/rt_*.log                        >> ${REGRESSIONTEST_LOG}
+if [[ -e fail_test ]]; then
+  echo "FAILED TESTS: "
+  echo "FAILED TESTS: "                        >> ${REGRESSIONTEST_LOG}
+  while read -r failed_test_name
+  do
+    echo "Test ${failed_test_name} failed "
+    echo "Test ${failed_test_name} failed "    >> ${REGRESSIONTEST_LOG}
+  done < fail_test
+   echo ; echo REGRESSION TEST FAILED
+  (echo ; echo REGRESSION TEST FAILED)         >> ${REGRESSIONTEST_LOG}
+else
+   echo ; echo REGRESSION TEST WAS SUCCESSFUL
+  (echo ; echo REGRESSION TEST WAS SUCCESSFUL) >> ${REGRESSIONTEST_LOG}
+
+  rm -f fv3_*.x fv3_*.exe modules.fv3_*
+  [[ ${KEEP_RUNDIR} == false ]] && rm -rf ${RUNDIR_ROOT}
+fi
+
+date >> ${REGRESSIONTEST_LOG}
+
+elapsed_time=$( printf '%02dh:%02dm:%02ds\n' $(($SECONDS%86400/3600)) $(($SECONDS%3600/60)) $(($SECONDS%60)) )
+echo "Elapsed time: ${elapsed_time}. Have a nice day!" >> ${REGRESSIONTEST_LOG}
+echo "Elapsed time: ${elapsed_time}. Have a nice day!"
