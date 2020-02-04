@@ -14,7 +14,7 @@ error() {
 usage() {
   set +x
   echo
-  echo "Usage: $program -n <test-name> { -c <baseline-cases> | -r <unit-test-cases> } [-h]"
+  echo "Usage: $program -n <test-name> { -c <baseline-cases> | -r <unit-test-cases> } [-k] [-h]"
   echo
   echo "  -n  specify <test-name>"
   echo
@@ -23,6 +23,8 @@ usage() {
   echo
   echo "  -r  run unit tests. <unit-test-cases> is either 'all' or any combination"
   echo "      of 'std','thread','mpi','decomp','restart','32bit','debug'"
+  echo
+  echo "  -k  keep run directory"
   echo
   echo "  -h  display this help and exit"
   echo
@@ -51,6 +53,9 @@ cleanup() {
   exit
 }
 
+########################################################################
+####                       PROGRAM STARTS                           ####
+########################################################################
 readonly program=$(basename $0)
 [[ $# -eq 0 ]] && usage_and_exit 1
 
@@ -59,7 +64,6 @@ trap '{ echo ut.sh quit; cleanup; }' QUIT
 trap '{ echo ut.sh terminated; cleanup; }' TERM
 trap '{ echo ut.sh error on line $LINENO; cleanup; }' ERR
 trap '{ echo ut.sh finished; cleanup; }' EXIT
-
 
 # Default compiler: intel
 export COMPILER=${NEMS_COMPILER:-intel}
@@ -83,11 +87,9 @@ fi
 LOG_DIR=${PATHRT}/log_$MACHINE_ID
 rm -rf ${LOG_DIR}
 mkdir ${LOG_DIR}
-# ROCOTO, ECFLOW, KEEP_RUNDIR are not used, but
-# defined here for compatibility with rt_fv3.sh
+# ROCOTO, ECFLOW not used, but defined for compatibility with rt_fv3.sh
 ROCOTO=false
 ECFLOW=false
-KEEP_RUNDIR=false
 
 # Machine-dependent libraries, modules, variables, etc.
 if [[ $MACHINE_ID = hera.* ]]; then
@@ -113,9 +115,10 @@ baseline_cases=
 run_unit_test=
 unit_test_cases=
 TEST_NAME=
+keep_rundir=false
 
 # Parse command line arguments
-while getopts :c:r:n:h opt
+while getopts :c:r:n:kh opt
 do
   case $opt in
     c)
@@ -161,6 +164,9 @@ do
       TEST_NAME=$OPTARG
       #echo "test-name = $TEST_NAME"
       ;;
+    k)
+      keep_rundir=true
+      ;;
     h)
       usage_and_exit 0
       ;;
@@ -170,7 +176,7 @@ do
   esac
 done
 
-# Various error checking
+# Various error checking for command line arguments
 if [ -z $TEST_NAME ]; then
   error "$program: please specify test-name. Try 'ut.sh -h' for usage."
 fi
@@ -181,7 +187,7 @@ elif [[ $CREATE_BASELINE = true && $run_unit_test = true ]]; then
   error "$program: cannot create baselines and run tests at the same time. Try 'ut.sh -h' for usage."
 fi
 
-# Fill in ut_compile_cases & ut_run_cases based on baseline_case & unit_test_cases
+# Fill in ut_compile_cases & ut_run_cases based on baseline_cases & unit_test_cases
 # Cases are sorted in the order: std,thread,mpi,decomp,restart,32bit,debug
 ut_compile_cases=
 ut_run_cases=
@@ -243,7 +249,6 @@ ut_run_cases=$(echo $ut_run_cases | sed -e 's/^[0-9]//g' -e 's/ [0-9]/ /g')
 echo "ut_compile_cases are $ut_compile_cases"
 echo "ut_run_cases are $ut_run_cases"
 
-
 ########################################################################
 ####                            COMPILE                             ####
 ########################################################################
@@ -255,6 +260,7 @@ rm -f fv3_*.exe modules.fv3_*
 
 for name in $ut_compile_cases
 do
+  model_case_found=false
   # Select compile option given model and compile_case
   while IFS="|" read model comp_case comp_opt
   do
@@ -263,10 +269,14 @@ do
     comp_opt=$(echo $comp_opt | sed -e 's/^ *//' -e 's/ *$//')
     if [[ $model == $TEST_NAME && $comp_case == $name ]]; then
       NEMS_VER=$comp_opt
+      model_case_found=true
       break;
     fi
   done < $build_file
-  # Put in the safety check for when model & comp_case combination is not found in ut.bld
+
+  if [[ model_case_found == false ]]; then
+    error "Build configuration for $TEST_NAME and $name not found. Please edit ut.bld."
+  fi
 
   ./compile.sh $PATHTR/FV3 $MACHINE_ID "${NEMS_VER}" $name >${LOG_DIR}/compile_${TEST_NAME}_$name.log 2>&1
   echo "bash compile is done for ${model} ${comp_case} with ${NEMS_VER}"
@@ -285,7 +295,7 @@ if [[ $CREATE_BASELINE == true ]]; then
   rsync -a "${RTPWD}"/FV3_* "${NEW_BASELINE}"/
   rsync -a "${RTPWD}"/WW3_* "${NEW_BASELINE}"/
 elif [[ $run_unit_test == true ]]; then
-  # TODO: It would be nice to remind the user when the baseline was generated
+  # TODO: It would be nice to remind the user the baseline time stamp
   if [[! -d $NEW_BASELINE ]]; then
     error "There is no baseline to run unit tests against. Create baselines first."
   fi
@@ -294,22 +304,38 @@ fi
 
 RUNDIR_ROOT=${RUNDIR_ROOT:-${PTMP}/${USER}}/FV3_UT/ut_$$
 mkdir -p ${RUNDIR_ROOT}
-REGRESSIONTEST_LOG=${PATHRT}/RegressionTests_$MACHINE_ID.log
-# Load namelist default and override values
-source default_vars.sh
-source ${PATHRT}/tests/$TEST_NAME
+# regressiontest_log is different from REGRESSIONTEST_LOG
+# defined in run_test.sh and passed onto rt_utils.sh
+regressiontest_log=${PATHRT}/RegressionTests_$MACHINE_ID.log
 
 for rc in $ut_run_cases; do
+  # Load namelist default and override values
+  source default_vars.sh
+  source ${PATHRT}/tests/$TEST_NAME
+  export RUN_SCRIPT
+
   comp_nm=std
   case $rc in
     std)
       # nothing to be changed for std
       ;;
     thread)
+      THRD=2
+      # INPES is sometimes odd, so use JNPES. Make sure JNPES is divisible by THRD
+      JNPES=$(( JNPES/THRD ))
+      TASKS=$(( INPES*JNPES*6 + WRITE_GROUP*WRTTASK_PER_GROUP ))
+      TPN=$(( TPN/THRD ))
+      NODES=$(( TASKS/TPN + 1 ))
       ;;
     mpi)
+      JNPES=$(( JNPES/2 ))
+      TASKS=$(( INPES*JNPES*6 + WRITE_GROUP*WRTTASK_PER_GROUP ))
+      NODES=$(( TASKS/TPN + 1 ))
       ;;
     decomp)
+      temp=$INPES
+      INPES=$JNPES
+      JNPES=$temp
       ;;
     restart)
       ;;
@@ -320,6 +346,8 @@ for rc in $ut_run_cases; do
       comp_nm=$rc
       ;;
   esac
+
+  echo "case: $rc; THRD: $THRD; INPES: $INPES; JNPES: $JNPES; TASKS: $TASKS; TPN: $TPN; NODES: $NODES"
 
   RT_SUFFIX="_$rc"
   BL_SUFFIX="_$comp_nm"
@@ -343,32 +371,32 @@ for rc in $ut_run_cases; do
   ./run_test.sh $PATHRT $RUNDIR_ROOT $TEST_NAME $rc $comp_nm > $LOG_DIR/run_${TEST_NAME}_$rc.log 2>&1
 done
 
-##
-## Unit test is either successful or failed
-##
+########################################################################
+####                       UNIT TEST STATUS                         ####
+########################################################################
 set +e
 cat ${LOG_DIR}/compile_*.log                   >  ${compile_log}
-cat ${LOG_DIR}/rt_*.log                        >> ${REGRESSIONTEST_LOG}
+cat ${LOG_DIR}/rt_*.log                        >> ${regressiontest_log}
 if [[ -e fail_test ]]; then
   echo "FAILED TESTS: "
-  echo "FAILED TESTS: "                        >> ${REGRESSIONTEST_LOG}
+  echo "FAILED TESTS: "                        >> ${regressiontest_log}
   while read -r failed_test_name
   do
     echo "Test ${failed_test_name} failed "
-    echo "Test ${failed_test_name} failed "    >> ${REGRESSIONTEST_LOG}
+    echo "Test ${failed_test_name} failed "    >> ${regressiontest_log}
   done < fail_test
    echo ; echo REGRESSION TEST FAILED
-  (echo ; echo REGRESSION TEST FAILED)         >> ${REGRESSIONTEST_LOG}
+  (echo ; echo REGRESSION TEST FAILED)         >> ${regressiontest_log}
 else
    echo ; echo REGRESSION TEST WAS SUCCESSFUL
-  (echo ; echo REGRESSION TEST WAS SUCCESSFUL) >> ${REGRESSIONTEST_LOG}
+  (echo ; echo REGRESSION TEST WAS SUCCESSFUL) >> ${regressiontest_log}
 
   rm -f fv3_*.x fv3_*.exe modules.fv3_*
-  [[ ${KEEP_RUNDIR} == false ]] && rm -rf ${RUNDIR_ROOT}
+  [[ ${keep_rundir} == false ]] && rm -rf ${RUNDIR_ROOT}
 fi
 
-date >> ${REGRESSIONTEST_LOG}
+date >> ${regressiontest_log}
 
 elapsed_time=$( printf '%02dh:%02dm:%02ds\n' $(($SECONDS%86400/3600)) $(($SECONDS%3600/60)) $(($SECONDS%60)) )
-echo "Elapsed time: ${elapsed_time}. Have a nice day!" >> ${REGRESSIONTEST_LOG}
+echo "Elapsed time: ${elapsed_time}. Have a nice day!" >> ${regressiontest_log}
 echo "Elapsed time: ${elapsed_time}. Have a nice day!"
