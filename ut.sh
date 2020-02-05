@@ -53,17 +53,17 @@ cleanup() {
   exit
 }
 
+trap 'echo ut.sh interrupted; cleanup' INT
+trap 'echo ut.sh quit; cleanup' QUIT
+trap 'echo ut.sh terminated; cleanup' TERM
+trap 'echo ut.sh error on line $LINENO; cleanup' ERR
+trap 'echo ut.sh finished; cleanup' EXIT
+
 ########################################################################
 ####                       PROGRAM STARTS                           ####
 ########################################################################
 readonly program=$(basename $0)
 [[ $# -eq 0 ]] && usage_and_exit 1
-
-trap '{ echo ut.sh interrupted; cleanup; }' INT
-trap '{ echo ut.sh quit; cleanup; }' QUIT
-trap '{ echo ut.sh terminated; cleanup; }' TERM
-trap '{ echo ut.sh error on line $LINENO; cleanup; }' ERR
-trap '{ echo ut.sh finished; cleanup; }' EXIT
 
 # Default compiler: intel
 export COMPILER=${NEMS_COMPILER:-intel}
@@ -252,6 +252,7 @@ echo "ut_run_cases are $ut_run_cases"
 ########################################################################
 ####                            COMPILE                             ####
 ########################################################################
+# build_file specifies compilation options
 build_file='ut.bld'
 [[ -f $build_file ]] || error "$build_file does not exist"
 
@@ -302,6 +303,7 @@ elif [[ $run_unit_test == true ]]; then
   RTPWD=${NEW_BASELINE}
 fi
 
+# Directory where all simulations are run
 RUNDIR_ROOT=${RUNDIR_ROOT:-${PTMP}/${USER}}/FV3_UT/ut_$$
 mkdir -p ${RUNDIR_ROOT}
 # regressiontest_log is different from REGRESSIONTEST_LOG
@@ -338,6 +340,16 @@ for rc in $ut_run_cases; do
       JNPES=$temp
       ;;
     restart)
+      # These parameters are different for regional restart, and won't work
+      WARM_START=.T.
+      NGGPS_IC=.F.
+      EXTERNAL_IC=.F.
+      MAKE_NH=.F.
+      MOUNTAIN=.T.
+      NA_INIT=0
+      FHMAX=48
+      FDIAG=3
+      NSTF_NAME=2,0,1,0,5
       ;;
     32bit)
       comp_nm=$rc
