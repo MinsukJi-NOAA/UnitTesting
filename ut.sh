@@ -28,16 +28,16 @@ usage() {
   echo
   echo "  -h  display this help and exit"
   echo
-  echo "  Examples:"
-  echo "    -create new baselines:"
-  echo "      ut.sh -n fv3_control -c all: std, 32bit, debug for fv3_control"
-  echo "      ut.sh -n fv3_iau -c std,debug: std, debug for fv3_iau"
-  echo "      ut.sh -n fv3_gfdlmprad_gws -c 32bit: 32bit for fv3_gfdlmprad_gws"
+  echo "  Examples"
+  echo "    To create new baselines:"
+  echo "      'ut.sh -n fv3_control -c all' creates std, 32bit, debug for fv3_control"
+  echo "      'ut.sh -n fv3_iau -c std,debug' creates std, debug for fv3_iau"
+  echo "      'ut.sh -n fv3_gfdlmprad_gws -c 32bit' creates 32bit for fv3_gfdlmprad_gws"
   echo
-  echo "    -run unit tests:"
-  echo "      ut.sh -n fv3_cpt -r all: std,thread,mpi,decomp,restart,32bit,debug for fv3_cpt"
-  echo "      ut.sh -n fv3_control -r thread,decomp: thread,decomp for fv3_control"
-  echo "      ut.sh -n fv3_stochy -r restart: restart for fv3_stochy"
+  echo "    To run unit tests:"
+  echo "      'ut.sh -n fv3_cpt -r all' runs std,thread,mpi,decomp,restart,32bit,debug for fv3_cpt"
+  echo "      'ut.sh -n fv3_control -r thread,decomp' runs thread,decomp for fv3_control"
+  echo "      'ut.sh -n fv3_stochy -r restart' runs restart for fv3_stochy"
   echo
   set -x
 }
@@ -84,7 +84,7 @@ else
 fi
 
 # Log directory
-LOG_DIR=${PATHRT}/log_$MACHINE_ID
+LOG_DIR=${PATHRT}/log_ut_$MACHINE_ID
 rm -rf ${LOG_DIR}
 mkdir ${LOG_DIR}
 # ROCOTO, ECFLOW not used, but defined for compatibility with rt_fv3.sh
@@ -256,8 +256,8 @@ echo "ut_run_cases are $ut_run_cases"
 build_file='ut.bld'
 [[ -f $build_file ]] || error "$build_file does not exist"
 
-compile_log=${PATHRT}/Compile_$MACHINE_ID.log
-rm -f fv3_*.exe modules.fv3_*
+compile_log=${PATHRT}/Compile_ut_$MACHINE_ID.log
+rm -f fv3_*.exe modules.fv3_* ${compile_log}
 
 for name in $ut_compile_cases
 do
@@ -306,9 +306,10 @@ fi
 # Directory where all simulations are run
 RUNDIR_ROOT=${RUNDIR_ROOT:-${PTMP}/${USER}}/FV3_UT/ut_$$
 mkdir -p ${RUNDIR_ROOT}
-# regressiontest_log is different from REGRESSIONTEST_LOG
+# unittest_log is different from REGRESSIONTEST_LOG
 # defined in run_test.sh and passed onto rt_utils.sh
-regressiontest_log=${PATHRT}/RegressionTests_$MACHINE_ID.log
+unittest_log=${PATHRT}/UnitTests_$MACHINE_ID.log
+rm -f fail_test ${unittest_log}
 
 for rc in $ut_run_cases; do
   # Load namelist default and override values
@@ -388,28 +389,23 @@ done
 ####                       UNIT TEST STATUS                         ####
 ########################################################################
 set +e
-cat ${LOG_DIR}/compile_*.log                   >  ${compile_log}
-cat ${LOG_DIR}/rt_*.log                        >> ${regressiontest_log}
+cat ${LOG_DIR}/compile_*.log > ${compile_log}
+cat ${LOG_DIR}/rt_*.log >> ${unittest_log}
+
 if [[ -e fail_test ]]; then
-  echo "FAILED TESTS: "
-  echo "FAILED TESTS: "                        >> ${regressiontest_log}
+  echo "FAILED TESTS: " | tee -a ${unittest_log}
   while read -r failed_test_name
   do
-    echo "Test ${failed_test_name} failed "
-    echo "Test ${failed_test_name} failed "    >> ${regressiontest_log}
+    echo "Test ${failed_test_name} failed " | tee -a ${unittest_log}
   done < fail_test
-   echo ; echo REGRESSION TEST FAILED
-  (echo ; echo REGRESSION TEST FAILED)         >> ${regressiontest_log}
+  echo "UNIT TEST FAILED" | tee -a ${unittest_log}
 else
-   echo ; echo REGRESSION TEST WAS SUCCESSFUL
-  (echo ; echo REGRESSION TEST WAS SUCCESSFUL) >> ${regressiontest_log}
+  echo "UNIT TEST WAS SUCCESSFUL" | tee -a ${unittest_log}
 
   rm -f fv3_*.x fv3_*.exe modules.fv3_*
   [[ ${keep_rundir} == false ]] && rm -rf ${RUNDIR_ROOT}
 fi
 
-date >> ${regressiontest_log}
-
-elapsed_time=$( printf '%02dh:%02dm:%02ds\n' $(($SECONDS%86400/3600)) $(($SECONDS%3600/60)) $(($SECONDS%60)) )
-echo "Elapsed time: ${elapsed_time}. Have a nice day!" >> ${regressiontest_log}
-echo "Elapsed time: ${elapsed_time}. Have a nice day!"
+date >> ${unittest_log}
+elapsed_time=$(printf '%02dh:%02dm:%02ds\n' $(($SECONDS%86400/3600)) $(($SECONDS%3600/60)) $(($SECONDS%60)))
+echo "Elapsed time: ${elapsed_time}. Have a nice day!" || tee -a ${unittest_log}
