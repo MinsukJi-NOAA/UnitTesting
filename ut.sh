@@ -358,6 +358,7 @@ for rc in $ut_run_cases; do
       comp_nm=$rc
       ;;
   esac
+  FHMAX=24
 
   echo "case: $rc; THRD: $THRD; INPES: $INPES; JNPES: $JNPES; TASKS: $TASKS; TPN: $TPN; NODES: $NODES"
 
