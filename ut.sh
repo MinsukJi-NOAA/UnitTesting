@@ -1,8 +1,6 @@
 #!/bin/bash
 set -eux
-
 SECONDS=0
-
 hostname
 
 error() {
@@ -14,7 +12,7 @@ error() {
 usage() {
   set +x
   echo
-  echo "Usage: $program -n <test-name> { -c <baseline-cases> | -r <unit-test-cases> } [-k] [-h]"
+  echo "Usage: $program -n <test-name> [ -c <baseline-cases> | -r <unit-test-cases> ] [-k] [-h]"
   echo
   echo "  -n  specify <test-name>"
   echo
@@ -29,15 +27,19 @@ usage() {
   echo "  -h  display this help and exit"
   echo
   echo "  Examples"
-  echo "    To create new baselines:"
-  echo "      'ut.sh -n fv3_control -c all' creates std, 32bit, debug for fv3_control"
-  echo "      'ut.sh -n fv3_iau -c std,debug' creates std, debug for fv3_iau"
-  echo "      'ut.sh -n fv3_gfdlmprad_gws -c 32bit' creates 32bit for fv3_gfdlmprad_gws"
   echo
-  echo "    To run unit tests:"
-  echo "      'ut.sh -n fv3_cpt -r all' runs std,thread,mpi,decomp,restart,32bit,debug for fv3_cpt"
-  echo "      'ut.sh -n fv3_control -r thread,decomp' runs thread,decomp for fv3_control"
-  echo "      'ut.sh -n fv3_stochy -r restart' runs restart for fv3_stochy"
+  echo "    To create new baselines and run unit tests:"
+  echo "      'utest -n fv3_thompson' creates and runs all for fv3_thompson"
+  echo
+  echo "    To create new baselines only:"
+  echo "      'utest -n fv3_control -c all' creates std, 32bit, debug for fv3_control"
+  echo "      'utest -n fv3_iau -c std,debug' creates std, debug for fv3_iau"
+  echo "      'utest -n fv3_gfdlmprad_gws -c 32bit' creates 32bit for fv3_gfdlmprad_gws"
+  echo
+  echo "    To run unit tests only:"
+  echo "      'utest -n fv3_cpt -r all' runs std,thread,mpi,decomp,restart,32bit,debug for fv3_cpt"
+  echo "      'utest -n fv3_control -r thread,decomp' runs thread,decomp for fv3_control"
+  echo "      'utest -n fv3_stochy -r restart' runs restart for fv3_stochy"
   echo
   set -x
 }
@@ -53,11 +55,103 @@ cleanup() {
   exit
 }
 
-trap 'echo ut.sh interrupted; cleanup' INT
-trap 'echo ut.sh quit; cleanup' QUIT
-trap 'echo ut.sh terminated; cleanup' TERM
-trap 'echo ut.sh error on line $LINENO; cleanup' ERR
-trap 'echo ut.sh finished; cleanup' EXIT
+run_utests() {
+  for rc in $ut_run_cases; do
+    # Load namelist default and override values
+    source default_vars.sh
+    source ${PATHRT}/tests/$TEST_NAME
+    export RUN_SCRIPT
+
+    comp_nm=std
+    case $rc in
+      std)
+        RESTART_INTERVAL=12
+        ;;
+      thread)
+        THRD=2
+        # INPES is sometimes odd, so use JNPES. Make sure JNPES is divisible by THRD
+        JNPES=$(( JNPES/THRD ))
+        TASKS=$(( INPES*JNPES*6 + WRITE_GROUP*WRTTASK_PER_GROUP ))
+        TPN=$(( TPN/THRD ))
+        NODES=$(( TASKS/TPN + 1 ))
+        ;;
+      mpi)
+        JNPES=$(( JNPES/2 ))
+        TASKS=$(( INPES*JNPES*6 + WRITE_GROUP*WRTTASK_PER_GROUP ))
+        NODES=$(( TASKS/TPN + 1 ))
+        ;;
+      decomp)
+        temp=$INPES
+        INPES=$JNPES
+        JNPES=$temp
+        ;;
+      restart)
+        # These parameters are different for regional restart, and won't work
+        WARM_START=.T.
+        NGGPS_IC=.F.
+        EXTERNAL_IC=.F.
+        MAKE_NH=.F.
+        MOUNTAIN=.T.
+        NA_INIT=0
+        NSTF_NAME=2,0,1,0,5
+
+        LIST_FILES="phyf024.nemsio dynf024.nemsio \
+                    RESTART/coupler.res RESTART/fv_core.res.nc RESTART/fv_core.res.tile1.nc \
+                    RESTART/fv_core.res.tile2.nc RESTART/fv_core.res.tile3.nc
+                    RESTART/fv_core.res.tile4.nc RESTART/fv_core.res.tile5.nc \
+                    RESTART/fv_core.res.tile6.nc RESTART/fv_srf_wnd.res.tile1.nc \
+                    RESTART/fv_srf_wnd.res.tile2.nc RESTART/fv_srf_wnd.res.tile3.nc \
+                    RESTART/fv_srf_wnd.res.tile4.nc RESTART/fv_srf_wnd.res.tile5.nc \
+                    RESTART/fv_srf_wnd.res.tile6.nc RESTART/fv_tracer.res.tile1.nc \
+                    RESTART/fv_tracer.res.tile2.nc RESTART/fv_tracer.res.tile3.nc \
+                    RESTART/fv_tracer.res.tile4.nc RESTART/fv_tracer.res.tile5.nc \
+                    RESTART/fv_tracer.res.tile6.nc RESTART/phy_data.tile1.nc \
+                    RESTART/phy_data.tile2.nc RESTART/phy_data.tile3.nc RESTART/phy_data.tile4.nc \
+                    RESTART/phy_data.tile5.nc RESTART/phy_data.tile6.nc RESTART/sfc_data.tile1.nc \
+                    RESTART/sfc_data.tile2.nc RESTART/sfc_data.tile3.nc RESTART/sfc_data.tile4.nc \
+                    RESTART/sfc_data.tile5.nc RESTART/sfc_data.tile6.nc"
+        #LIST_FILES="phyf024.tile1.nc phyf024.tile2.nc phyf024.tile3.nc phyf024.tile4.nc \
+        #            phyf024.tile5.nc phyf024.tile6.nc dynf024.tile1.nc dynf024.tile2.nc \
+        #            dynf024.tile3.nc dynf024.tile4.nc dynf024.tile5.nc dynf024.tile6.nc \
+        ;;
+      32bit)
+        comp_nm=$rc
+        ;;
+      debug)
+        comp_nm=$rc
+        ;;
+    esac
+
+    echo "case: $rc; THRD: $THRD; INPES: $INPES; JNPES: $JNPES; TASKS: $TASKS; TPN: $TPN; NODES: $NODES"
+
+    RT_SUFFIX="_$rc"
+    BL_SUFFIX="_$comp_nm"
+
+    cat <<- EOF > ${RUNDIR_ROOT}/run_test_$rc.env
+		export MACHINE_ID=${MACHINE_ID}
+		export RTPWD=${RTPWD}
+		export PATHRT=${PATHRT}
+		export PATHTR=${PATHTR}
+		export NEW_BASELINE=${NEW_BASELINE}
+		export CREATE_BASELINE=${CREATE_BASELINE}
+		export RT_SUFFIX=${RT_SUFFIX}
+		export BL_SUFFIX=${BL_SUFFIX}
+		export SCHEDULER=${SCHEDULER}
+		export ACCNR=${ACCNR}
+		export QUEUE=${QUEUE}
+		export ROCOTO=${ROCOTO}
+		export LOG_DIR=${LOG_DIR}
+		EOF
+
+    ./run_test.sh $PATHRT $RUNDIR_ROOT $TEST_NAME $rc $comp_nm > $LOG_DIR/run_${TEST_NAME}_$rc.log 2>&1
+  done
+}
+
+trap 'echo utest interrupted; cleanup' INT
+trap 'echo utest quit; cleanup' QUIT
+trap 'echo utest terminated; cleanup' TERM
+trap 'echo utest error on line $LINENO; cleanup' ERR
+trap 'echo utest finished; cleanup' EXIT
 
 ########################################################################
 ####                       PROGRAM STARTS                           ####
@@ -75,12 +169,12 @@ cd $PATHRT
 # PATHTR - Path to trunk directory
 readonly PATHTR=$(cd ${PATHRT}/.. && pwd)
 
-# make sure only one instance of ut.sh is running
+# make sure only one instance of utest is running
 readonly lockdir=${PATHRT}/lock
 if mkdir $lockdir 2>/dev/null; then
   echo $(hostname) $$ > ${lockdir}/PID
 else
-  error "Only one instance of ut.sh can be running at a time"
+  error "Only one instance of utest can be running at a time"
 fi
 
 # Log directory
@@ -110,19 +204,18 @@ else
   error "Unknown machine ID. Edit detect_machine.sh file"
 fi
 
-CREATE_BASELINE=
+CREATE_BASELINE=true
 baseline_cases=
-run_unit_test=
+run_unit_test=true
 unit_test_cases=
 TEST_NAME=
 keep_rundir=false
 
 # Parse command line arguments
-while getopts :c:r:n:kh opt
-do
+while getopts :c:r:n:kh opt; do
   case $opt in
     c)
-      CREATE_BASELINE=true
+      run_unit_test=false
       if [ $OPTARG = all ]; then
         baseline_cases=std,32bit,debug
       else
@@ -135,13 +228,9 @@ do
           error "Invalid baseline_cases specified: $i"
         fi
       done
-      run_unit_test=false
-      echo "CREATE_BASELINE = $CREATE_BASELINE"
-      echo "baseline_cases = $baseline_cases"
-      echo "run_unit_test = $run_unit_test"
       ;;
     r)
-      run_unit_test=true
+      CREATE_BASELINE=false
       if [ $OPTARG = all ]; then
         unit_test_cases=std,thread,mpi,decomp,restart,32bit,debug
       else
@@ -155,10 +244,6 @@ do
           error "Invalid unit_test_cases specified: $i"
         fi
       done
-      CREATE_BASELINE=false
-      echo "run_unit_test = $run_unit_test"
-      echo "unit_test_cases = $unit_test_cases"
-      echo "CREATE_BASELINE = $CREATE_BASELINE"
       ;;
     n)
       TEST_NAME=$OPTARG
@@ -176,22 +261,28 @@ do
   esac
 done
 
-# Various error checking for command line arguments
+# TEST_NAME is a required argument
 if [ -z $TEST_NAME ]; then
-  error "$program: please specify test-name. Try 'ut.sh -h' for usage."
+  error "$program: please specify test-name. Try 'utest -h' for usage."
 fi
 
-if [[ $CREATE_BASELINE != true && $run_unit_test != true ]]; then
-  error "$program: choose either create baselines or run tests. Try 'ut.sh -h' for usage."
-elif [[ $CREATE_BASELINE = true && $run_unit_test = true ]]; then
-  error "$program: cannot create baselines and run tests at the same time. Try 'ut.sh -h' for usage."
+# Default where neither -c nor -r is specified: compile and run all cases
+if [[ $CREATE_BASELINE == true && run_unit_test == true ]]; then
+  baseline_cases=std,32bit,debug
+  unit_test_cases=std,thread,mpi,decomp,restart,32bit,debug
 fi
+
+echo "baseline_cases = $baseline_cases"
+echo "unit_test_cases = $unit_test_cases"
 
 # Fill in ut_compile_cases & ut_run_cases based on baseline_cases & unit_test_cases
 # Cases are sorted in the order: std,thread,mpi,decomp,restart,32bit,debug
 ut_compile_cases=
 ut_run_cases=
-if [[ $CREATE_BASELINE == true ]]; then
+if [[ $CREATE_BASELINE == true && $run_unit_test == true ]]; then
+  ut_compile_cases="1std 232bit 3debug"
+  ut_run_cases="1std 2thread 3mpi 4decomp 5restart 632bit 7debug"
+elif [[ $CREATE_BASELINE == true && $run_unit_test == false ]]; then
   for i in $baseline_cases; do
     case $i in
       std)
@@ -208,7 +299,7 @@ if [[ $CREATE_BASELINE == true ]]; then
         ;;
     esac
   done
-elif [[ $run_unit_test == true ]]; then
+elif [[ $run_unit_test == true && $CREATE_BASELINE == false ]]; then
   for i in $unit_test_cases; do
     case $i in
       std)
@@ -253,7 +344,7 @@ echo "ut_run_cases are $ut_run_cases"
 ####                            COMPILE                             ####
 ########################################################################
 # build_file specifies compilation options
-build_file='ut.bld'
+build_file='utest.bld'
 [[ -f $build_file ]] || error "$build_file does not exist"
 
 compile_log=${PATHRT}/Compile_ut_$MACHINE_ID.log
@@ -295,12 +386,6 @@ if [[ $CREATE_BASELINE == true ]]; then
 
   rsync -a "${RTPWD}"/FV3_* "${NEW_BASELINE}"/
   rsync -a "${RTPWD}"/WW3_* "${NEW_BASELINE}"/
-elif [[ $run_unit_test == true ]]; then
-  # TODO: It would be nice to remind the user the baseline time stamp
-  if [[! -d $NEW_BASELINE ]]; then
-    error "There is no baseline to run unit tests against. Create baselines first."
-  fi
-  RTPWD=${NEW_BASELINE}
 fi
 
 # Directory where all simulations are run
@@ -311,95 +396,28 @@ mkdir -p ${RUNDIR_ROOT}
 unittest_log=${PATHRT}/UnitTests_$MACHINE_ID.log
 rm -f fail_test ${unittest_log}
 
-for rc in $ut_run_cases; do
-  # Load namelist default and override values
-  source default_vars.sh
-  source ${PATHRT}/tests/$TEST_NAME
-  export RUN_SCRIPT
-
-  comp_nm=std
-  case $rc in
-    std)
-      RESTART_INTERVAL=12
-      ;;
-    thread)
-      THRD=2
-      # INPES is sometimes odd, so use JNPES. Make sure JNPES is divisible by THRD
-      JNPES=$(( JNPES/THRD ))
-      TASKS=$(( INPES*JNPES*6 + WRITE_GROUP*WRTTASK_PER_GROUP ))
-      TPN=$(( TPN/THRD ))
-      NODES=$(( TASKS/TPN + 1 ))
-      ;;
-    mpi)
-      JNPES=$(( JNPES/2 ))
-      TASKS=$(( INPES*JNPES*6 + WRITE_GROUP*WRTTASK_PER_GROUP ))
-      NODES=$(( TASKS/TPN + 1 ))
-      ;;
-    decomp)
-      temp=$INPES
-      INPES=$JNPES
-      JNPES=$temp
-      ;;
-    restart)
-      # These parameters are different for regional restart, and won't work
-      WARM_START=.T.
-      NGGPS_IC=.F.
-      EXTERNAL_IC=.F.
-      MAKE_NH=.F.
-      MOUNTAIN=.T.
-      NA_INIT=0
-      NSTF_NAME=2,0,1,0,5
-
-      LIST_FILES="phyf024.nemsio dynf024.nemsio \
-                  RESTART/coupler.res RESTART/fv_core.res.nc RESTART/fv_core.res.tile1.nc \
-                  RESTART/fv_core.res.tile2.nc RESTART/fv_core.res.tile3.nc
-                  RESTART/fv_core.res.tile4.nc RESTART/fv_core.res.tile5.nc \
-                  RESTART/fv_core.res.tile6.nc RESTART/fv_srf_wnd.res.tile1.nc \
-                  RESTART/fv_srf_wnd.res.tile2.nc RESTART/fv_srf_wnd.res.tile3.nc \
-                  RESTART/fv_srf_wnd.res.tile4.nc RESTART/fv_srf_wnd.res.tile5.nc \
-                  RESTART/fv_srf_wnd.res.tile6.nc RESTART/fv_tracer.res.tile1.nc \
-                  RESTART/fv_tracer.res.tile2.nc RESTART/fv_tracer.res.tile3.nc \
-                  RESTART/fv_tracer.res.tile4.nc RESTART/fv_tracer.res.tile5.nc \
-                  RESTART/fv_tracer.res.tile6.nc RESTART/phy_data.tile1.nc \
-                  RESTART/phy_data.tile2.nc RESTART/phy_data.tile3.nc RESTART/phy_data.tile4.nc \
-                  RESTART/phy_data.tile5.nc RESTART/phy_data.tile6.nc RESTART/sfc_data.tile1.nc \
-                  RESTART/sfc_data.tile2.nc RESTART/sfc_data.tile3.nc RESTART/sfc_data.tile4.nc \
-                  RESTART/sfc_data.tile5.nc RESTART/sfc_data.tile6.nc"
-      #LIST_FILES="phyf024.tile1.nc phyf024.tile2.nc phyf024.tile3.nc phyf024.tile4.nc \
-      #            phyf024.tile5.nc phyf024.tile6.nc dynf024.tile1.nc dynf024.tile2.nc \
-      #            dynf024.tile3.nc dynf024.tile4.nc dynf024.tile5.nc dynf024.tile6.nc \
-      ;;
-    32bit)
-      comp_nm=$rc
-      ;;
-    debug)
-      comp_nm=$rc
-      ;;
-  esac
-
-  echo "case: $rc; THRD: $THRD; INPES: $INPES; JNPES: $JNPES; TASKS: $TASKS; TPN: $TPN; NODES: $NODES"
-
-  RT_SUFFIX="_$rc"
-  BL_SUFFIX="_$comp_nm"
-
-  cat <<- EOF > ${RUNDIR_ROOT}/run_test_$rc.env
-	export MACHINE_ID=${MACHINE_ID}
-	export RTPWD=${RTPWD}
-	export PATHRT=${PATHRT}
-	export PATHTR=${PATHTR}
-	export NEW_BASELINE=${NEW_BASELINE}
-	export CREATE_BASELINE=${CREATE_BASELINE}
-	export RT_SUFFIX=${RT_SUFFIX}
-	export BL_SUFFIX=${BL_SUFFIX}
-	export SCHEDULER=${SCHEDULER}
-	export ACCNR=${ACCNR}
-	export QUEUE=${QUEUE}
-	export ROCOTO=${ROCOTO}
-	export LOG_DIR=${LOG_DIR}
-	EOF
-
-  ./run_test.sh $PATHRT $RUNDIR_ROOT $TEST_NAME $rc $comp_nm > $LOG_DIR/run_${TEST_NAME}_$rc.log 2>&1
-done
+if [[ $CREATE_BASELINE == true && $run_unit_test == true ]]; then
+  # Run to create baseline
+  ut_run_cases='std 32bit debug'
+  run_utests
+  rm -rf ${RUNDIR_ROOT}/*
+  rm -f ${LOG_DIR}/run_* ${LOG_DIR}/rt_*
+  # Run to compare with baseline
+  ut_run_cases='std thread mpi decomp restart 32bit debug'
+  CREATE_BASELINE=false
+  RTPWD=${NEW_BASELINE}
+  run_utests
+elif [[ $CREATE_BASELINE == true && $run_unit_test == false ]]; then
+  # Run to create baselind
+  run_utests
+elif [[ $CREATE_BASELINE == false && $run_unit_test == true ]]; then
+  # Run to compare with baseline
+  if [[ ! -d $NEW_BASELINE ]]; then
+    error "There is no baseline to run unit tests against. Create baselines first."
+  fi
+  RTPWD=${NEW_BASELINE}
+  run_utests
+fi
 
 ########################################################################
 ####                       UNIT TEST STATUS                         ####
