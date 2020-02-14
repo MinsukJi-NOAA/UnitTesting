@@ -95,7 +95,9 @@ run_utests() {
         NA_INIT=0
         NSTF_NAME=2,0,1,0,5
 
-        LIST_FILES="phyf024.nemsio dynf024.nemsio \
+        LIST_FILES="phyf024.tile1.nc phyf024.tile2.nc phyf024.tile3.nc phyf024.tile4.nc \
+                    phyf024.tile5.nc phyf024.tile6.nc dynf024.tile1.nc dynf024.tile2.nc \
+                    dynf024.tile3.nc dynf024.tile4.nc dynf024.tile5.nc dynf024.tile6.nc \
                     RESTART/coupler.res RESTART/fv_core.res.nc RESTART/fv_core.res.tile1.nc \
                     RESTART/fv_core.res.tile2.nc RESTART/fv_core.res.tile3.nc
                     RESTART/fv_core.res.tile4.nc RESTART/fv_core.res.tile5.nc \
@@ -110,9 +112,7 @@ run_utests() {
                     RESTART/phy_data.tile5.nc RESTART/phy_data.tile6.nc RESTART/sfc_data.tile1.nc \
                     RESTART/sfc_data.tile2.nc RESTART/sfc_data.tile3.nc RESTART/sfc_data.tile4.nc \
                     RESTART/sfc_data.tile5.nc RESTART/sfc_data.tile6.nc"
-        #LIST_FILES="phyf024.tile1.nc phyf024.tile2.nc phyf024.tile3.nc phyf024.tile4.nc \
-        #            phyf024.tile5.nc phyf024.tile6.nc dynf024.tile1.nc dynf024.tile2.nc \
-        #            dynf024.tile3.nc dynf024.tile4.nc dynf024.tile5.nc dynf024.tile6.nc \
+        #LIST_FILES="phyf024.nemsio dynf024.nemsio \
         ;;
       32bit)
         comp_nm=$rc
@@ -337,9 +337,11 @@ ut_compile_cases=$(echo $ut_compile_cases | tr " " "\n" | sort -u)
 ut_compile_cases=$(echo $ut_compile_cases | sed -e 's/^[0-9]//g' -e 's/ [0-9]/ /g')
 ut_run_cases=$(echo $ut_run_cases | tr " " "\n" | sort -u)
 ut_run_cases=$(echo $ut_run_cases | sed -e 's/^[0-9]//g' -e 's/ [0-9]/ /g')
+if [[ ! $ut_run_cases =~ ^std && $ut_run_cases =~ restart ]]; then
+  ut_run_cases="std ${ut_run_cases}"
+fi
 echo "ut_compile_cases are $ut_compile_cases"
 echo "ut_run_cases are $ut_run_cases"
-
 ########################################################################
 ####                            COMPILE                             ####
 ########################################################################
@@ -366,7 +368,7 @@ do
     fi
   done < $build_file
 
-  if [[ model_case_found == false ]]; then
+  if [[ $model_case_found == false ]]; then
     error "Build configuration for $TEST_NAME and $name not found. Please edit ut.bld."
   fi
 
