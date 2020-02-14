@@ -95,10 +95,7 @@ run_utests() {
         NA_INIT=0
         NSTF_NAME=2,0,1,0,5
 
-        LIST_FILES="phyf024.tile1.nc phyf024.tile2.nc phyf024.tile3.nc phyf024.tile4.nc \
-                    phyf024.tile5.nc phyf024.tile6.nc dynf024.tile1.nc dynf024.tile2.nc \
-                    dynf024.tile3.nc dynf024.tile4.nc dynf024.tile5.nc dynf024.tile6.nc \
-                    RESTART/coupler.res RESTART/fv_core.res.nc RESTART/fv_core.res.tile1.nc \
+        LIST_FILES="RESTART/coupler.res RESTART/fv_core.res.nc RESTART/fv_core.res.tile1.nc \
                     RESTART/fv_core.res.tile2.nc RESTART/fv_core.res.tile3.nc
                     RESTART/fv_core.res.tile4.nc RESTART/fv_core.res.tile5.nc \
                     RESTART/fv_core.res.tile6.nc RESTART/fv_srf_wnd.res.tile1.nc \
@@ -112,7 +109,14 @@ run_utests() {
                     RESTART/phy_data.tile5.nc RESTART/phy_data.tile6.nc RESTART/sfc_data.tile1.nc \
                     RESTART/sfc_data.tile2.nc RESTART/sfc_data.tile3.nc RESTART/sfc_data.tile4.nc \
                     RESTART/sfc_data.tile5.nc RESTART/sfc_data.tile6.nc"
-        #LIST_FILES="phyf024.nemsio dynf024.nemsio \
+
+        if [[ $OUTPUT_FILE == "'netcdf'" ]]; then
+          LIST_FILES="phyf024.tile1.nc phyf024.tile2.nc phyf024.tile3.nc phyf024.tile4.nc \
+                      phyf024.tile5.nc phyf024.tile6.nc dynf024.tile1.nc dynf024.tile2.nc \
+                      dynf024.tile3.nc dynf024.tile4.nc dynf024.tile5.nc dynf024.tile6.nc ${LIST_FILES}"
+        elif [[ $OUTPUT_FILE == "'nemsio'" ]]; then
+          LIST_FILES="phyf024.nemsio dynf024.nemsio ${LIST_FILES}"
+        fi
         ;;
       32bit)
         comp_nm=$rc
