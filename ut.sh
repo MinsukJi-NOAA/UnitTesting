@@ -368,10 +368,9 @@ if [[ ${model_found} == false ]]; then
 fi
 
 for name in $ut_compile_cases; do
-  NEMS_VER=${base_opt}
   case $name in
     std)
-      # Nothing to be done
+      NEMS_VER=${base_opt}
       ;;
     32bit)
       if [[ ${base_opt} =~ "32BIT=Y" ]]; then
@@ -383,15 +382,15 @@ for name in $ut_compile_cases; do
       fi
       ;;
     debug)
-      NEMS_VER="${base_opt} DEBUG=Y"
+      NEMS_VER="${base_opt} 32BIT=Y DEBUG=Y"
       ;;
   esac
-
+  NEMS_VER=$(echo ${NEMS_VER} | sed -e 's/^ *//' -e 's/ *$//')
   echo "compile case: $name"
   echo "NEMS_VER: $NEMS_VER"
 
   ./compile.sh $PATHTR/FV3 $MACHINE_ID "${NEMS_VER}" $name >${LOG_DIR}/compile_${TEST_NAME}_$name.log 2>&1
-  echo "bash compile is done for ${model} ${comp_case} with ${NEMS_VER}"
+  echo "bash compile is done for ${model} ${name} with ${NEMS_VER}"
 done
 
 ########################################################################
