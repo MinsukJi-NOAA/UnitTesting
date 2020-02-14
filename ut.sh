@@ -342,35 +342,53 @@ if [[ ! $ut_run_cases =~ ^std && $ut_run_cases =~ restart ]]; then
 fi
 echo "ut_compile_cases are $ut_compile_cases"
 echo "ut_run_cases are $ut_run_cases"
+
 ########################################################################
 ####                            COMPILE                             ####
 ########################################################################
 # build_file specifies compilation options
 build_file='utest.bld'
-[[ -f $build_file ]] || error "$build_file does not exist"
+[[ -f ${build_file} ]] || error "${build_file} does not exist"
 
 compile_log=${PATHRT}/Compile_ut_$MACHINE_ID.log
 rm -f fv3_*.exe modules.fv3_* ${compile_log}
 
-for name in $ut_compile_cases
-do
-  model_case_found=false
-  # Select compile option given model and compile_case
-  while IFS="|" read model comp_case comp_opt
-  do
-    model=$(echo $model | sed -e 's/^ *//' -e 's/ *$//')
-    comp_case=$(echo $comp_case | sed -e 's/^ *//' -e 's/ *$//')
-    comp_opt=$(echo $comp_opt | sed -e 's/^ *//' -e 's/ *$//')
-    if [[ $model == $TEST_NAME && $comp_case == $name ]]; then
-      NEMS_VER=$comp_opt
-      model_case_found=true
-      break;
-    fi
-  done < $build_file
-
-  if [[ $model_case_found == false ]]; then
-    error "Build configuration for $TEST_NAME and $name not found. Please edit ut.bld."
+while IFS="|" read model comp_opt; do
+  model_found=false
+  model=$(echo $model | sed -e 's/^ *//' -e 's/ *$//')
+  comp_opt=$(echo $comp_opt | sed -e 's/^ *//' -e 's/ *$//')
+  if [[ $model == ${TEST_NAME} ]]; then
+    base_opt=${comp_opt}
+    model_found=true
+    break
   fi
+done < ${build_file}
+if [[ ${model_found} == false ]]; then
+  error "Build options for $TEST_NAME not found. Please edit utest.bld."
+fi
+
+for name in $ut_compile_cases; do
+  NEMS_VER=${base_opt}
+  case $name in
+    std)
+      # Nothing to be done
+      ;;
+    32bit)
+      if [[ ${base_opt} =~ "32BIT=Y" ]]; then
+        NEMS_VER=$(echo ${base_opt} | sed -e 's/32BIT=Y/32BIT=N/')
+      elif [[ ${base_opt} =~ "32BIT=N" ]]; then
+        NEMS_VER=$(echo ${base_opt} | sed -e 's/32BIT=N/32BIT=Y/')
+      else
+        NEMS_VER="${base_opt} 32BIT=Y"
+      fi
+      ;;
+    debug)
+      NEMS_VER="${base_opt} DEBUG=Y"
+      ;;
+  esac
+
+  echo "compile case: $name"
+  echo "NEMS_VER: $NEMS_VER"
 
   ./compile.sh $PATHTR/FV3 $MACHINE_ID "${NEMS_VER}" $name >${LOG_DIR}/compile_${TEST_NAME}_$name.log 2>&1
   echo "bash compile is done for ${model} ${comp_case} with ${NEMS_VER}"

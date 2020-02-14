@@ -1,9 +1,3 @@
-fv3_control        | std   |
-fv3_control        | 32bit | 32BIT=Y
-fv3_control        | debug | 32BIT=Y DEBUG=Y
-fv3_gfdlmprad_gwd  | std   |
-fv3_gfdlmprad_gwd  | 32bit | 32BIT=Y
-fv3_gfdlmprad_gwd  | debug | 32BIT=Y DEBUG=Y
-fv3_thompson       | std   |
-fv3_thompson       | 32bit | 32BIT=Y
-fv3_thompson       | debug | 32BIT=Y DEBUG=Y
+fv3_control        |
+fv3_gfdlmprad_gwd  |
+fv3_thompson       |
